@@ -13,12 +13,14 @@ from pagerank import iterative_pagerank
 
 HREF_RE = re.compile(r'HREF\s*=\s*"(.*?)"', re.IGNORECASE)
 
+
 def setup_logging() -> logging.Logger:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
     return logging.getLogger("analysis")
+
 
 def parse_outgoing_links(text: str, nodes_set: Set[str]) -> List[str]:
     out: List[str] = []
@@ -39,6 +41,7 @@ def parse_outgoing_links(text: str, nodes_set: Set[str]) -> List[str]:
 
     return out
 
+
 def list_nodes_from_bucket(client: storage.Client, bucket_name: str, log: logging.Logger) -> List[str]:
     nodes: List[str] = []
     t0 = time.time()
@@ -52,10 +55,11 @@ def list_nodes_from_bucket(client: storage.Client, bucket_name: str, log: loggin
     log.info(f"Finished listing. Found {len(nodes)} objects in {time.time() - t0:.2f}s")
     return nodes
 
+
 def _download_one(bucket_name: str, blob_name: str) -> Tuple[str, str]:
     """
     Runs inside a download worker thread:
-      - creates its own client (safe)
+      - creates its own client (thread-safe)
       - downloads blob text
     Returns: (blob_name, text)
     """
@@ -63,6 +67,7 @@ def _download_one(bucket_name: str, blob_name: str) -> Tuple[str, str]:
     bucket = client.bucket(bucket_name)
     text = bucket.blob(blob_name).download_as_text()
     return blob_name, text
+
 
 def _parse_one(blob_name: str, text: str, nodes_set: Set[str]) -> Tuple[str, List[str]]:
     """
@@ -73,7 +78,8 @@ def _parse_one(blob_name: str, text: str, nodes_set: Set[str]) -> Tuple[str, Lis
     outs = parse_outgoing_links(text, nodes_set)
     return blob_name, outs
 
-def compute_in_out_counts(
+
+def compute_in_out_counts_download_then_parse(
     bucket_name: str,
     limit_files: Optional[int] = None,
     download_workers: int = 8,
@@ -81,7 +87,11 @@ def compute_in_out_counts(
     log_every: int = 100,
     log: Optional[logging.Logger] = None,
 ) -> Tuple[List[str], Dict[str, int], Dict[str, int], Dict[str, List[str]]]:
-
+    """
+    STRICT TWO-PHASE:
+      Phase 1: Download ALL file contents
+      Phase 2: Parse ALL downloaded contents
+    """
     if log is None:
         log = logging.getLogger("analysis")
 
@@ -98,7 +108,8 @@ def compute_in_out_counts(
 
     log.info(
         f"Will analyze {len(nodes)} files from bucket '{bucket_name}' "
-        f"using download_workers={download_workers}, parse_workers={parse_workers}"
+        f"using download_workers={download_workers}, parse_workers={parse_workers} "
+        f"(STRICT download-then-parse)"
     )
 
     # Final outputs
@@ -108,49 +119,53 @@ def compute_in_out_counts(
 
     t0 = time.time()
 
-    # Stage 1: download futures
-    download_futures = []
+    # -------------------------
+    # Phase 1: DOWNLOAD ALL
+    # -------------------------
+    downloaded_text: Dict[str, str] = {}
     downloaded = 0
 
     with ThreadPoolExecutor(max_workers=download_workers) as dl_ex:
-        for u in nodes:
-            download_futures.append(dl_ex.submit(_download_one, bucket_name, u))
-        log.info(f"Queued {len(download_futures)} downloads. Starting downloads...")
+        futures = [dl_ex.submit(_download_one, bucket_name, u) for u in nodes]
+        log.info(f"Queued {len(futures)} downloads. Starting downloads...")
 
-        # Stage 2: parse futures created as downloads complete
-        parse_futures = []
-        parsed = 0
+        for f in as_completed(futures):
+            u, text = f.result()
+            downloaded_text[u] = text
+            downloaded += 1
 
-        with ThreadPoolExecutor(max_workers=parse_workers) as parse_ex:
-            for df in as_completed(download_futures):
-                u, text = df.result()
-                downloaded += 1
+            if log_every > 0 and downloaded % log_every == 0:
+                elapsed = time.time() - t0
+                rate = downloaded / elapsed if elapsed > 0 else 0.0
+                log.info(f"Downloaded {downloaded}/{len(nodes)} files ({rate:.1f} files/sec)")
 
-                if log_every > 0 and downloaded % log_every == 0:
-                    elapsed = time.time() - t0
-                    rate = downloaded / elapsed if elapsed > 0 else 0.0
-                    log.info(f"Downloaded {downloaded}/{len(nodes)} files ({rate:.1f} files/sec)")
+    log.info("All downloads completed. Starting parsing phase...")
 
-                parse_futures.append(parse_ex.submit(_parse_one, u, text, nodes_set))
+    # -------------------------
+    # Phase 2: PARSE ALL
+    # -------------------------
+    parsed = 0
 
-            log.info("All downloads completed. Waiting for parsing to finish...")
+    with ThreadPoolExecutor(max_workers=parse_workers) as parse_ex:
+        parse_futures = [parse_ex.submit(_parse_one, u, downloaded_text[u], nodes_set) for u in nodes]
 
-            for pf in as_completed(parse_futures):
-                u, outs = pf.result()
-                parsed += 1
+        for pf in as_completed(parse_futures):
+            u, outs = pf.result()
+            parsed += 1
 
-                out_degree[u] = len(outs)
-                for v in outs:
-                    in_counts[v] += 1
-                    in_links[v].append(u)
+            out_degree[u] = len(outs)
+            for v in outs:
+                in_counts[v] += 1
+                in_links[v].append(u)
 
-                if log_every > 0 and parsed % log_every == 0:
-                    elapsed = time.time() - t0
-                    rate = parsed / elapsed if elapsed > 0 else 0.0
-                    log.info(f"Parsed {parsed}/{len(nodes)} files ({rate:.1f} files/sec)")
+            if log_every > 0 and parsed % log_every == 0:
+                elapsed = time.time() - t0
+                rate = parsed / elapsed if elapsed > 0 else 0.0
+                log.info(f"Parsed {parsed}/{len(nodes)} files ({rate:.1f} files/sec)")
 
-    log.info(f"Finished download+parse of {len(nodes)} files in {time.time() - t0:.2f}s")
+    log.info(f"Finished download THEN parse of {len(nodes)} files in {time.time() - t0:.2f}s")
     return nodes, out_degree, in_counts, in_links
+
 
 def main() -> None:
     log = setup_logging()
@@ -161,42 +176,46 @@ def main() -> None:
         "--limit_files",
         type=int,
         default=1000,
-        help="Read only the first N files (for testing)",
+        help="Read only the first N files (for testing). Use 0 or omit for all files.",
     )
     parser.add_argument(
         "--download_workers",
         type=int,
         default=8,
-        help="Number of threads for GCS downloads (network bound)",
+        help="Number of threads for GCS downloads (network bound).",
     )
     parser.add_argument(
         "--parse_workers",
         type=int,
         default=8,
-        help="Number of threads for parsing (CPU bound-ish)",
+        help="Number of threads for parsing (CPU bound-ish).",
     )
     parser.add_argument(
         "--log_every",
         type=int,
         default=100,
-        help="Log progress after every N files (0 disables)",
+        help="Log progress after every N files (0 disables).",
     )
     args = parser.parse_args()
 
+    limit_files = args.limit_files
+    if limit_files == 0:
+        limit_files = None
+
     print(
-        f"\n=== Analyzing {args.limit_files} files "
+        f"\n=== Analyzing {'ALL' if limit_files is None else limit_files} files "
         f"(download_workers={args.download_workers}, parse_workers={args.parse_workers}) ==="
     )
     log.info(
-        f"Args: bucket={args.bucket}, limit_files={args.limit_files}, "
+        f"Args: bucket={args.bucket}, limit_files={limit_files}, "
         f"download_workers={args.download_workers}, parse_workers={args.parse_workers}, "
         f"log_every={args.log_every}"
     )
 
     t0 = time.time()
-    nodes, out_degree, in_counts, in_links = compute_in_out_counts(
+    nodes, out_degree, in_counts, in_links = compute_in_out_counts_download_then_parse(
         bucket_name=args.bucket,
-        limit_files=args.limit_files,
+        limit_files=limit_files,
         download_workers=args.download_workers,
         parse_workers=args.parse_workers,
         log_every=args.log_every,
@@ -234,7 +253,6 @@ def main() -> None:
     print(f"PageRank time:    {t2 - t1:.2f} sec (iters={iters})")
     print(f"Total time:       {t2 - t0:.2f} sec")
 
+
 if __name__ == "__main__":
     main()
-
-
