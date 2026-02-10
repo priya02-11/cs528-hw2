@@ -88,7 +88,6 @@ def compute_in_out_counts_download_then_parse(
     log: Optional[logging.Logger] = None,
 ) -> Tuple[List[str], Dict[str, int], Dict[str, int], Dict[str, List[str]]]:
     """
-    STRICT TWO-PHASE:
       Phase 1: Download ALL file contents
       Phase 2: Parse ALL downloaded contents
     """
@@ -106,11 +105,6 @@ def compute_in_out_counts_download_then_parse(
 
     nodes_set = set(nodes)
 
-    log.info(
-        f"Will analyze {len(nodes)} files from bucket '{bucket_name}' "
-        f"using download_workers={download_workers}, parse_workers={parse_workers} "
-        f"(STRICT download-then-parse)"
-    )
 
     # Final outputs
     out_degree: Dict[str, int] = {u: 0 for u in nodes}
