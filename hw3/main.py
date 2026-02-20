@@ -9,10 +9,14 @@ from google.cloud import pubsub_v1
 
 
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "priya-cc-hw2")
-
-# topic for Pub/Sub + Logging 
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "evident-gecko-486418-c7")
 TOPIC_ID = os.environ.get("TOPIC_ID", "hw3-error-logs")
+
+# ✅ FORBIDDEN COUNTRIES LIST
+FORBIDDEN_COUNTRIES = {
+    'north korea', 'iran', 'cuba', 'myanmar',
+    'iraq', 'libya', 'sudan', 'zimbabwe', 'syria'
+}
 
 storage_client = storage.Client()
 
@@ -35,16 +39,17 @@ except Exception as e:
 
 
 def publish_error(entry: dict):
-    """Publish only error events to Pub/Sub (doesn't break request if publish fails)."""
+    """Publish error events to Pub/Sub for Service 2"""
     if not publisher or not topic_path:
         return
     try:
-        publisher.publish(topic_path, json.dumps(entry).encode("utf-8"))
+        future = publisher.publish(topic_path, json.dumps(entry).encode("utf-8"))
+        future.result()  # Wait for publish to complete
     except Exception as e:
         print(json.dumps({"severity": "ERROR", "message": f"Pub/Sub publish failed: {e}"}))
 
 
-def log_struct(status, method, path, severity="INFO", error_type=None):
+def log_struct(status, method, path, country=None, severity="INFO", error_type=None):
     entry = {
         "status": status,
         "method": method,
@@ -52,6 +57,9 @@ def log_struct(status, method, path, severity="INFO", error_type=None):
         "error_type": error_type,
         "timestamp": time.time(),
     }
+    
+    if country:
+        entry["country"] = country
 
     # structured log to Cloud Logging
     if logger:
@@ -60,15 +68,42 @@ def log_struct(status, method, path, severity="INFO", error_type=None):
     # print log 
     print(json.dumps({**entry, "severity": severity}))
 
-    # publish errors to Pub/Sub
-    if status in [404, 500, 501]:
+    if status==400:
+        print(400, country)
+
+    # ✅ publish errors AND forbidden countries to Pub/Sub
+    if status in [400, 404, 500, 501]:
         publish_error(entry)
 
 
 @functions_framework.http
 def serve_file(request: Request):
     method = request.method
-    raw_path = request.path.lstrip("/")  
+    raw_path = request.path.lstrip("/")
+    
+    # ✅ EXTRACT X-COUNTRY HEADER
+    x_country = request.headers.get('X-country', '').strip()
+    
+    # ✅ CHECK FOR FORBIDDEN COUNTRY FIRST (before anything else!)
+    if x_country and x_country.lower() in FORBIDDEN_COUNTRIES:
+        log_struct(
+            400, 
+            method, 
+            raw_path or "/", 
+            country=x_country,
+            severity="ERROR", 
+            error_type="FORBIDDEN_COUNTRY"
+        )
+        
+        return (
+            json.dumps({
+                "error": "Permission Denied",
+                "message": f"Requests from {x_country} are forbidden",
+                "country": x_country
+            }),
+            400,
+            {"Content-Type": "application/json"}
+        )
 
     # 501 for non-GET
     if method != "GET":
@@ -91,14 +126,13 @@ def serve_file(request: Request):
     # If URL includes bucket name, strip it out
     file_path = raw_path
     if raw_path.startswith(BUCKET_NAME + "/"):
-        file_path = raw_path[len(BUCKET_NAME) + 1:]  # -> "19716.html"
+        file_path = raw_path[len(BUCKET_NAME) + 1:]
 
     try:
         bucket = storage_client.bucket(BUCKET_NAME)
         blob = bucket.blob(file_path)
 
         # 404 for non-existent file
-        
         if not blob.exists(storage_client):
             log_struct(404, method, file_path, severity="ERROR", error_type="NOT_FOUND")
             return (
@@ -114,7 +148,6 @@ def serve_file(request: Request):
         return (content, 200, {"Content-Type": blob.content_type or "text/html"})
 
     except Exception as e:
-        # include the exception message in logs (helpful for debugging)
         log_struct(500, method, file_path, severity="ERROR", error_type="INTERNAL_ERROR")
         return (
             json.dumps({"error": "Internal Server Error", "message": str(e)}),
