@@ -12,7 +12,7 @@ BUCKET_NAME = os.environ.get("BUCKET_NAME", "priya-cc-hw2")
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "evident-gecko-486418-c7")
 TOPIC_ID = os.environ.get("TOPIC_ID", "hw3-error-logs")
 
-# ✅ FORBIDDEN COUNTRIES LIST
+# FORBIDDEN COUNTRIES LIST
 FORBIDDEN_COUNTRIES = {
     'north korea', 'iran', 'cuba', 'myanmar',
     'iraq', 'libya', 'sudan', 'zimbabwe', 'syria'
@@ -71,7 +71,7 @@ def log_struct(status, method, path, country=None, severity="INFO", error_type=N
     if status==400:
         print(400, country)
 
-    # ✅ publish errors AND forbidden countries to Pub/Sub
+    # publish errors AND forbidden countries to Pub/Sub
     if status in [400, 404, 500, 501]:
         publish_error(entry)
 
@@ -81,10 +81,10 @@ def serve_file(request: Request):
     method = request.method
     raw_path = request.path.lstrip("/")
     
-    # ✅ EXTRACT X-COUNTRY HEADER
+    # EXTRACT X-COUNTRY HEADER
     x_country = request.headers.get('X-country', '').strip()
     
-    # ✅ CHECK FOR FORBIDDEN COUNTRY FIRST (before anything else!)
+    # CHECK FOR FORBIDDEN COUNTRY FIRST (before anything else!)
     if x_country and x_country.lower() in FORBIDDEN_COUNTRIES:
         log_struct(
             400, 
