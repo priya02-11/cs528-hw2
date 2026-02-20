@@ -107,7 +107,7 @@ def serve_file(request: Request):
 
     # 501 for non-GET
     if method != "GET":
-        log_struct(501, method, raw_path or "/", severity="ERROR", error_type="NOT_IMPLEMENTED")
+        log_struct(501, method, raw_path or "/", country=x_country, severity="ERROR", error_type="NOT_IMPLEMENTED")
         return (
             json.dumps({"error": "Not Implemented", "message": f"{method} not supported"}),
             501,
@@ -116,7 +116,7 @@ def serve_file(request: Request):
 
     # 400 for empty path
     if not raw_path:
-        log_struct(400, method, "/", severity="WARNING", error_type="EMPTY_PATH")
+        log_struct(400, method, "/", country=x_country, severity="WARNING", error_type="EMPTY_PATH")
         return (
             json.dumps({"error": "Bad Request", "message": "No file specified"}),
             400,
@@ -134,7 +134,7 @@ def serve_file(request: Request):
 
         # 404 for non-existent file
         if not blob.exists(storage_client):
-            log_struct(404, method, file_path, severity="ERROR", error_type="NOT_FOUND")
+            log_struct(404, method, file_path, country=x_country, severity="ERROR", error_type="NOT_FOUND")
             return (
                 json.dumps({"error": "Not Found", "message": f"{file_path} not found"}),
                 404,
@@ -143,12 +143,12 @@ def serve_file(request: Request):
 
         # 200 return file content
         content = blob.download_as_bytes()
-        log_struct(200, method, file_path, severity="INFO", error_type=None)
+        log_struct(200, method, file_path, country=x_country, severity="INFO", error_type=None)
 
         return (content, 200, {"Content-Type": blob.content_type or "text/html"})
 
     except Exception as e:
-        log_struct(500, method, file_path, severity="ERROR", error_type="INTERNAL_ERROR")
+        log_struct(500, method, file_path, country=x_country, severity="ERROR", error_type="INTERNAL_ERROR")
         return (
             json.dumps({"error": "Internal Server Error", "message": str(e)}),
             500,
