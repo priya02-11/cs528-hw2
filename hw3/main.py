@@ -8,9 +8,9 @@ from google.cloud import logging as cloud_logging
 from google.cloud import pubsub_v1
 
 
-BUCKET_NAME = os.environ.get("BUCKET_NAME", "priya-cc-hw2")
-PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "evident-gecko-486418-c7")
-TOPIC_ID = os.environ.get("TOPIC_ID", "hw3-error-logs")
+BUCKET_NAME = "priya-cc-hw2"
+PROJECT_ID = "evident-gecko-486418-c7"
+TOPIC_ID = "hw3-error-logs"
 
 # FORBIDDEN COUNTRIES LIST
 FORBIDDEN_COUNTRIES = {
@@ -21,22 +21,12 @@ FORBIDDEN_COUNTRIES = {
 storage_client = storage.Client()
 
 # Cloud Logging 
-try:
-    logging_client = cloud_logging.Client(project=PROJECT_ID)
-    logger = logging_client.logger("hw3-file-service")
-except Exception as e:
-    logger = None
-    print(json.dumps({"severity": "WARNING", "message": f"Cloud Logging init failed: {e}"}))
+logging_client = cloud_logging.Client()
+logger = logging_client.logger("hw3-file-service")
 
 # Pub/Sub 
-try:
-    publisher = pubsub_v1.PublisherClient()
-    topic_path = publisher.topic_path(PROJECT_ID, TOPIC_ID)
-except Exception as e:
-    publisher = None
-    topic_path = None
-    print(json.dumps({"severity": "WARNING", "message": f"Pub/Sub init failed: {e}"}))
-
+publisher = pubsub_v1.PublisherClient()
+topic_path = publisher.topic_path(PROJECT_ID, TOPIC_ID)
 
 def publish_error(entry: dict):
     """Publish error events to Pub/Sub for Service 2"""
