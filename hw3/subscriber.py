@@ -13,7 +13,7 @@ from google.cloud import storage
 from google.api_core.exceptions import PreconditionFailed
 #Configuration
 PROJECT_ID = "evident-gecko-486418-c7"
-SUBSCRIPTION_ID = "hw3-error-logs-sub"
+SUBSCRIPTION_ID = "hw3-errorlogs-subscription"
 BUCKET_NAME = "priya-cc-hw2"
 
 # One single log object in the bucket 
