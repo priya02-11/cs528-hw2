@@ -1,10 +1,11 @@
 import json
 import time
 import threading
-from flask import Flask, request, Response
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, Response
 from google.cloud import storage, logging, pubsub_v1
 
-app = Flask(__name__)
+app = FastAPI()
 
 BUCKET_NAME = "priya-cc-hw2"
 PROJECT_ID = "evident-gecko-486418-c7"
@@ -55,11 +56,11 @@ def log_struct(status, method, path, country=None, severity="WARNING", error_typ
         publish_error(entry)
 
 
-@app.route("/", defaults={"file_path": ""}, methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
-@app.route("/<path:file_path>", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
-def serve_file(file_path):
+@app.api_route("/{file_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
+@app.api_route("/", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
+async def serve_file(request: Request, file_path: str = ""):
     method = request.method
-    x_country = request.headers.get("X-country", "").strip()
+    x_country = request.headers.get("x-country", "").strip()
 
     print(json.dumps({
         "severity": "INFO",
@@ -72,28 +73,25 @@ def serve_file(file_path):
     # CHECK FORBIDDEN COUNTRY
     if x_country and x_country.lower() in FORBIDDEN_COUNTRIES:
         log_struct(400, method, file_path or "/", country=x_country, severity="CRITICAL", error_type="FORBIDDEN_COUNTRY")
-        return Response(
-            json.dumps({"error": "Permission Denied", "message": f"Requests from {x_country} are forbidden"}),
-            status=400,
-            mimetype="application/json"
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Permission Denied", "message": f"Requests from {x_country} are forbidden"}
         )
 
     # CHECK METHOD
     if method != "GET":
         log_struct(501, method, file_path or "/", severity="WARNING", error_type="NOT_IMPLEMENTED")
-        return Response(
-            json.dumps({"error": "Not Implemented", "message": f"{method} not supported"}),
-            status=501,
-            mimetype="application/json"
+        return JSONResponse(
+            status_code=501,
+            content={"error": "Not Implemented", "message": f"{method} not supported"}
         )
 
     # CHECK EMPTY PATH
     if not file_path:
         log_struct(400, method, "/", severity="WARNING", error_type="EMPTY_PATH")
-        return Response(
-            json.dumps({"error": "Bad Request", "message": "No file specified"}),
-            status=400,
-            mimetype="application/json"
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Bad Request", "message": "No file specified"}
         )
 
     try:
@@ -103,24 +101,23 @@ def serve_file(file_path):
 
         if not blob.exists():
             log_struct(404, method, file_path, severity="WARNING", error_type="NOT_FOUND")
-            return Response(
-                json.dumps({"error": "Not Found", "message": f"{file_path} not found"}),
-                status=404,
-                mimetype="application/json"
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Not Found", "message": f"{file_path} not found"}
             )
 
         content = blob.download_as_bytes()
-        return Response(content, status=200, mimetype=blob.content_type or "text/html")
+        return Response(content=content, status_code=200, media_type=blob.content_type or "text/html")
 
     except Exception as e:
         print(json.dumps({"severity": "ERROR", "message": f"Unexpected exception: {e}"}))
         log_struct(500, method, file_path, severity="ERROR", error_type="INTERNAL_ERROR")
-        return Response(
-            json.dumps({"error": "Internal Server Error", "message": str(e)}),
-            status=500,
-            mimetype="application/json"
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Internal Server Error", "message": str(e)}
         )
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)
